@@ -139,7 +139,6 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
         const dest = src.dest.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
         const destAbs = dest ? safeJoin(repo, dest) : repo;
         if (isInside(path.join(repo, ".git"), destAbs)) throw new UserError("dest may not be inside .git");
-        if (!dest && src.mirror) throw new UserError("mirror needs a dest subdirectory (refusing to mirror into the repository root)");
         const files = await scanFiles(rootDir, { root: "", sourceJobId: null, include: src.include, exclude: src.exclude, files: [], extensions: [], recursive: true, maxFiles: 200_000 }, c.signal);
         const keep = new Set<string>();
         let copied = 0, skippedSecret = 0;
@@ -153,17 +152,28 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
           copied++;
         }
         let removed = 0;
-        if (src.mirror && (await exists(destAbs))) {
+        // Empty dest = spread the source's top-level folders (e.g. Assembly-CSharp/) straight into the repo root.
+        // Mirroring then only prunes inside those folders, never anything else in the repository.
+        const top = [...new Set(files.filter((f) => !isSecretLike(f.path)).map((f) => f.path.split("/")[0]))];
+        if (!dest && src.mirror) {
+          for (const d of top.filter((t) => files.some((f) => f.path.startsWith(t + "/")))) {
+            const dirAbs = safeJoin(repo, d);
+            if (!(await exists(dirAbs))) continue;
+            for (const old of await listFiles(dirAbs, { root: "", sourceJobId: null, include: [], exclude: [], files: [], extensions: [], recursive: true, maxFiles: 500_000 }, c.signal)) {
+              if (!keep.has(pkey(d + "/" + old.path))) { await fsp.rm(safeJoin(dirAbs, old.path), { force: true }); removed++; }
+            }
+          }
+        } else if (src.mirror && (await exists(destAbs))) {
           for (const old of await listFiles(destAbs, { root: "", sourceJobId: null, include: [], exclude: [], files: [], extensions: [], recursive: true, maxFiles: 500_000 }, c.signal)) {
             if (!keep.has(pkey(old.path)) && path.basename(old.path) !== METADATA) { await fsp.rm(safeJoin(destAbs, old.path), { force: true }); removed++; }
           }
         }
         c.log(`Source ${rootDir} -> ${dest || "."}: ${copied} copied, ${removed} removed, ${skippedSecret} secret-like files skipped`);
-        dests.push(dest || ".");
+        if (dest) dests.push(dest); else dests.push(...top);
       }
       if (!dests.length) throw new Error("No sources configured: nothing to track in the repository");
 
-      const metaDir = (cfg.metadataDir || dests[0]).replace(/\\/g, "/");
+      const metaDir = (cfg.metadataDir || (cfg.sources.some((x: { dest: string }) => !x.dest) ? "." : dests[0])).replace(/\\/g, "/");
       const metaRel = (metaDir === "." ? "" : metaDir + "/") + METADATA;
       await git(["add", "-A", "--", ...dests]);
       // Leak guard: refuse to commit anything containing a directory of THIS machine (data, work, allowed roots, home, temp).

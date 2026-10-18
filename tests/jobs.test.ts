@@ -385,3 +385,29 @@ describe("git job", () => {
     expect(runOf("git").error).toMatch(/not a git repository|inside another repository/);
   });
 });
+
+describe("git job: spread layout", () => {
+  it("puts each exported assembly folder at the repo root and prunes only inside them", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mh-spread-"));
+    env = makeEnv();
+    env.svc.ctx.settings.update({ paths: { allowedRoots: [tmp] } });
+    const w = env.svc.watches.create({ appId: 480, followMode: "all" }, "Spacewar");
+    const exp = path.join(tmp, "exports"); // stands in for the decompile job's src/ folder
+    write(exp, "Assembly-CSharp/Game.cs", "class Game {}"); write(exp, "Assembly-CSharp/Old.cs", "class Old {}"); write(exp, "PhotonUnityNetworking/Net.cs", "class Net {}");
+    const repo = path.join(tmp, "repo");
+    write(repo, "README.md", "mine"); write(repo, "Unrelated/keep.txt", "keep");
+    const cfg = { repoPath: repo, sources: [{ path: exp, dest: "", mirror: true }] };
+    env.svc.ctx.db.run("INSERT INTO job_defs(name,type,ord,max_retries,timeout_sec,config_json,created_at,updated_at) VALUES('git','git',1,0,60,?,'x','x')", JSON.stringify(cfg));
+    await publish(w.id, "1", { "1": "a" }); await publish(w.id, "2", { "1": "b" }); await drain();
+    expect(runOf("git").error).toBeNull();
+    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/Old.cs", "PhotonUnityNetworking/Net.cs", "manifesthound-metadata.json"]);
+    // README and Unrelated stay untracked and untouched
+    write(repo, "Unrelated/keep.txt", "keep");
+    fs.rmSync(path.join(exp, "Assembly-CSharp/Old.cs")); write(exp, "Assembly-CSharp/Game.cs", "class Game2 {}");
+    await publish(w.id, "3", { "1": "c" }); await drain();
+    expect(runOf("git").status).toBe("succeeded");
+    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "PhotonUnityNetworking/Net.cs", "manifesthound-metadata.json"]);
+    expect(fs.existsSync(path.join(repo, "Unrelated/keep.txt"))).toBe(true);
+    expect(fs.readFileSync(path.join(repo, "README.md"), "utf8")).toBe("mine");
+  }, 60_000);
+});

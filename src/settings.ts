@@ -47,6 +47,7 @@ export const SettingsSchema = z.object({
   }).prefault({}),
   tools: z.object({
     ilspyCmdPath: z.string().default("ilspycmd"),
+    depotDownloaderPath: z.string().default("DepotDownloader"),
   }).prefault({}),
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),

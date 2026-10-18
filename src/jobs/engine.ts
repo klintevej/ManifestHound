@@ -10,11 +10,12 @@ import { collectHandler, reportHandler } from "./collect.js";
 import { archiveHandler } from "./archive.js";
 import { decompileHandler } from "./decompile.js";
 import { gitHandler } from "./git.js";
+import { depotDownloadHandler } from "./depotdownload.js";
 import type { Selection } from "./files.js";
 import path from "node:path";
 
 export const HANDLERS: Record<JobType, JobHandler> = {
-  collect: collectHandler, report: reportHandler, archive: archiveHandler, decompile: decompileHandler, git: gitHandler,
+  depotdownload: depotDownloadHandler, collect: collectHandler, report: reportHandler, archive: archiveHandler, decompile: decompileHandler, git: gitHandler,
 };
 
 const MAX_LOG = 256 * 1024;

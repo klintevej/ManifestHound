@@ -24,6 +24,7 @@ export async function gamesPage({ refresh }) {
       { key: "accountName", label: "Account", render: (w) => w.accountName || "anonymous" },
       { key: "lastError", label: "Last error", render: (w) => h("span", { class: "err" }, (w.lastError || "").slice(0, 100)), sort: (w) => w.lastError || "" },
       { key: "x", label: "", sortable: false, render: (w) => h("div", { class: "row" },
+        h("button", { class: "small primary", title: "Download, decompile and push the current build now", onclick: () => pull(w) }, "Pull now"),
         h("button", { class: "small", onclick: () => guard(async () => { const r = await post(`/watches/${w.id}/check`); toast(r.ok ? (r.eventId ? `Check done: ${r.kind} recorded` : "Check done: no change") : r.error || r.skipped, r.ok ? "ok" : "bad"); refresh(); }) }, "Check"),
         h("button", { class: "small", onclick: () => guard(async () => { await post(`/watches/${w.id}/${w.enabled ? "pause" : "resume"}`); refresh(); }) }, w.enabled ? "Pause" : "Resume"),
         h("button", { class: "small", onclick: () => editWatch(w) }, "Edit"),
@@ -31,6 +32,12 @@ export async function gamesPage({ refresh }) {
     ], rows, { sortKey: "name", empty: "No games yet. Click Add game." }));
   };
   q.addEventListener("input", draw);
+
+  function pull(w) {
+    modal("Pull " + w.name + " now?", h("p", {}, "Runs this game's jobs (for example download, decompile, commit and push) for the build currently known, in order. No Discord message is sent. A push only happens if files changed."), { actions: [
+      { label: "Cancel", onclick: (c) => c() },
+      { label: "Pull now", class: "primary", onclick: (c) => guard(async () => { const r = await post(`/watches/${w.id}/pull`); c(); toast("Started. Progress is in Update history.", "ok"); location.hash = "#/history/" + r.eventId; }) }] });
+  }
 
   function removeWatch(w) {
     const hist = check("Also delete this game's update history, notifications and job logs", false);

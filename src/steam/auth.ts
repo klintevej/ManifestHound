@@ -51,9 +51,8 @@ export class SteamAuth {
       const r = await session.startWithCredentials({ accountName: p.username, password: input.password });
       if (r.actionRequired) {
         p.actions = (r.validActions ?? []).map((a: any) => ({ type: GUARD_NAMES[a.type] ?? String(a.type), detail: a.detailMessage }));
-      } else if (p.state === "waiting") {
-        await this.finish(p); // some flows authenticate immediately
       }
+      // No action needed: Steam fires "authenticated" once the token is ready; finish() runs from that event.
     } catch (e) {
       this.pending.delete(id);
       throw new UserError(`Steam rejected the sign-in: ${(e as Error).message}`);
@@ -88,7 +87,8 @@ export class SteamAuth {
   private async finish(p: Pending) {
     if (p.state === "authenticated") return;
     try {
-      const token: string = p.session.refreshToken;
+      const token: string | undefined = p.session.refreshToken;
+      if (!token) throw new Error("Steam did not return a refresh token");
       const enc = this.ctx.box.encrypt(token);
       const existing = this.ctx.db.get("SELECT id FROM accounts WHERE name=?", p.accountName);
       let id: number;
@@ -103,6 +103,7 @@ export class SteamAuth {
       this.steam.drop(id);
       p.accountId = id;
       p.state = "authenticated";
+      p.error = undefined;
       p.actions = [];
       this.ctx.logger.child("steam-auth").info("Account authenticated", { account: p.accountName });
     } catch (e) {

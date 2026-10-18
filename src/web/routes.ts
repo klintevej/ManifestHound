@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 import type { Services } from "../services.js";
 import type { AuthService } from "./auth.js";
-import { getEventDetail, rowToEvent, type EventRecord } from "../events.js";
+import { createManualEvent, getEventDetail, rowToEvent, type EventRecord } from "../events.js";
 import { NotifySchema, rowToWatch } from "../watches.js";
 import { searchGames, storeAppName } from "../steam/store.js";
 import { buildPayload, buildTemplateContext, sendWebhook, validateWebhookUrl } from "../notify/discord.js";
@@ -95,6 +95,12 @@ export function apiRouter(svc: Services, auth: AuthService) {
     res.json({ ok: true });
   });
   r.post("/watches/:id/check", async (req, res) => res.json(await svc.monitor.check(num(req.params.id))));
+  r.post("/watches/:id/pull", async (req, res) => {
+    const w = svc.watches.get(num(req.params.id));
+    if (!w) throw new UserError("Game not found", 404);
+    await svc.monitor.check(w.id); // refresh the known build first; a failed check is fine if a build is already recorded
+    res.status(202).json({ eventId: createManualEvent(ctx, w) });
+  });
   r.post("/watches/:id/pause", (req, res) => res.json(svc.watches.update(num(req.params.id), { enabled: false })));
   r.post("/watches/:id/resume", (req, res) => res.json(svc.watches.update(num(req.params.id), { enabled: true })));
 
@@ -186,7 +192,7 @@ export function apiRouter(svc: Services, auth: AuthService) {
     maxRetries: z.number().int().min(0).max(10).default(1), stopOnFail: z.boolean().default(false), outputDir: z.string().nullish(),
     config: z.record(z.string(), z.any()).default({}), secrets: z.record(z.string(), z.string()).optional(),
   });
-  const ALLOWED_SECRETS: Record<JobType, string[]> = { collect: [], report: [], archive: [], decompile: [], git: [] };
+  const ALLOWED_SECRETS: Record<JobType, string[]> = { depotdownload: [], collect: [], report: [], archive: [], decompile: [], git: [] };
   const checkJob = (b: z.infer<typeof JobBody>) => {
     const cfg = validateConfig(b.type, b.config);
     const roots = ctx.settings.roots(), work = ctx.settings.workDir();
@@ -198,14 +204,52 @@ export function apiRouter(svc: Services, auth: AuthService) {
     return cfg;
   };
   r.get("/jobs", (_req, res) => res.json(db.all("SELECT * FROM job_defs ORDER BY ord, id").map(maskJob)));
-  r.post("/jobs", (req, res) => {
-    const b = JobBody.parse(req.body);
+  const insertJob = (b: z.infer<typeof JobBody>) => {
     const cfg = checkJob(b);
     const sec = b.secrets && Object.keys(b.secrets).length ? ctx.box.encrypt(JSON.stringify(b.secrets)) : null;
     const id = db.run(`INSERT INTO job_defs(watch_id,name,description,type,enabled,ord,depot_filter,timeout_sec,max_retries,stop_on_fail,output_dir,config_json,secrets_enc,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, b.watchId, b.name, b.description ?? null, b.type, b.enabled ? 1 : 0, b.ord, JSON.stringify(b.depotFilter), b.timeoutSec,
       b.maxRetries, b.stopOnFail ? 1 : 0, b.outputDir ?? null, JSON.stringify(cfg), sec, nowIso(), nowIso()).lastId;
+    return id;
+  };
+  r.post("/jobs", (req, res) => {
+    const id = insertJob(JobBody.parse(req.body));
     res.status(201).json(maskJob(db.get("SELECT * FROM job_defs WHERE id=?", id)));
+  });
+
+  // One-click "Archive" setup: download (DepotDownloader) -> decompile (ILSpy) -> commit and push (Git), chained by source job.
+  const ArchiveBody = z.object({
+    watchId: z.number().int(),
+    os: z.enum(["", "windows", "linux", "macos"]).default(""),
+    steamUsername: z.string().regex(/^[\w.-]*$/).default(""),
+    downloadFiles: z.array(z.string().min(1)).default(["**/*_Data/Managed/*.dll"]),
+    assemblies: z.array(z.string().min(1)).min(1).default(["*_Data/Managed/*.dll"]),
+    excludeAssemblies: z.array(z.string().min(1)).default([]),
+    languageVersion: z.string().regex(/^(CSharp\d+(_\d+)?|Preview|Latest)$/).default("Latest"),
+    repoPath: z.string().default(""),
+    branch: z.string().regex(/^[\w][\w./-]*$/).default("main"),
+    remoteUrl: z.string().default(""),
+    push: z.boolean().default(false),
+    credentialId: z.number().int().nullable().default(null),
+  });
+  r.post("/presets/archive", (req, res) => {
+    const b = ArchiveBody.parse(req.body);
+    const w = svc.watches.get(b.watchId);
+    if (!w) throw new UserError("Unknown game");
+    const repoPath = b.repoPath.trim() || path.join(ctx.settings.workDir(), "repos", String(w.appId));
+    if (b.push && !b.remoteUrl) throw new UserError("Push needs a remote URL");
+    const tag = `${w.name}`;
+    const common = { watchId: w.id, enabled: true, depotFilter: [], secrets: undefined, outputDir: null as string | null, description: "Created by the Archive preset" };
+    const ids = db.tx(() => {
+      const dl = insertJob({ ...common, name: `Archive 1: download ${tag}`, type: "depotdownload", ord: 10, timeoutSec: 6 * 3600, maxRetries: 2, stopOnFail: true,
+        config: { os: b.os, username: b.steamUsername, files: b.downloadFiles } });
+      const dc = insertJob({ ...common, name: `Archive 2: decompile ${tag}`, type: "decompile", ord: 20, timeoutSec: 3600, maxRetries: 1, stopOnFail: true,
+        config: { selection: { sourceJobId: dl, exclude: b.excludeAssemblies }, assemblies: b.assemblies, languageVersion: b.languageVersion, onExisting: "overwrite", copyInputs: false } });
+      const gt = insertJob({ ...common, name: `Archive 3: commit and push ${tag}`, type: "git", ord: 30, timeoutSec: 1800, maxRetries: 2, stopOnFail: false,
+        config: { repoPath, branch: b.branch, remoteUrl: b.remoteUrl, push: b.push, credentialId: b.credentialId, sources: [{ sourceJobId: dc, path: "src", dest: "", mirror: true }] } });
+      return { download: dl, decompile: dc, git: gt };
+    });
+    res.status(201).json({ ids, repoPath: path.relative(ctx.settings.workDir(), repoPath).split(path.sep).join("/") });
   });
   r.put("/jobs/:id", (req, res) => {
     const id = num(req.params.id);

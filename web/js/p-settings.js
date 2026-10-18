@@ -39,10 +39,11 @@ export async function settingsPage({ refresh }) {
     },
     jobs() {
       const mc = num(s.jobs.maxConcurrent, 1), to = num(s.jobs.defaultTimeoutSec, 5);
-      const il = h("input", { value: s.tools.ilspyCmdPath });
+      const il = h("input", { value: s.tools.ilspyCmdPath }), dd = h("input", { value: s.tools.depotDownloaderPath });
       return h("div", {}, h("h2", {}, "Job execution"), h("div", { class: "grid cols2" }, field("Max concurrent jobs", mc), field("Default timeout (s)", to)),
         h("h2", { style: "margin-top:18px" }, "Decompiler"), field("ilspycmd executable", il, "Install: dotnet tool install -g ilspycmd"),
-        h("button", { class: "primary", onclick: () => save({ jobs: { maxConcurrent: +mc.value, defaultTimeoutSec: +to.value }, tools: { ilspyCmdPath: il.value } }) }, "Save"));
+        h("h2", { style: "margin-top:18px" }, "Depot downloader"), field("DepotDownloader executable", dd, "Release zip from github.com/SteamRE/DepotDownloader (windows-x64, linux-x64 or linux-arm64). Full path is fine."),
+        h("button", { class: "primary", onclick: () => save({ jobs: { maxConcurrent: +mc.value, defaultTimeoutSec: +to.value }, tools: { ilspyCmdPath: il.value, depotDownloaderPath: dd.value.trim() } }) }, "Save"));
     },
     git() {
       const gp = h("input", { value: s.git.gitPath }), gn = h("input", { value: s.git.authorName }), ge = h("input", { value: s.git.authorEmail });

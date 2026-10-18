@@ -6,7 +6,7 @@ import type { Watch } from "../watches.js";
 import { resolveInsideRoots, UserError, parseJson } from "../util/misc.js";
 import { SelectionSchema, type Selection } from "./files.js";
 
-export const JOB_TYPES = ["collect", "report", "archive", "decompile", "git"] as const;
+export const JOB_TYPES = ["depotdownload", "collect", "report", "archive", "decompile", "git"] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 export interface JobDef {
@@ -56,6 +56,19 @@ const WaitSchema = z.object({ acfPath: z.string().min(1), timeoutSec: z.number()
 
 /** Per-type config validation, run when a job is saved and again before it executes. */
 export const ConfigSchemas: Record<JobType, z.ZodType<any>> = {
+  depotdownload: z.object({
+    /** Depot IDs to fetch. Empty = every depot that changed in the update (or all depots of the app on a manual run). */
+    depots: z.array(z.string().regex(/^\d+$/)).default([]),
+    /** Pin each download to the manifest ID of the update event. */
+    pinManifests: z.boolean().default(true),
+    os: z.enum(["", "windows", "linux", "macos"]).default(""),
+    allPlatforms: z.boolean().default(false),
+    /** Steam account name for owned content. Sign in once in a terminal with -remember-password. Empty = anonymous. */
+    username: z.string().regex(/^[\w.-]*$/).default(""),
+    /** Only download files matching these globs (relative to the depot root). Empty = everything. */
+    files: z.array(z.string()).default([]),
+    maxDownloads: z.number().int().min(1).max(64).default(8),
+  }).prefault({}),
   collect: z.object({ selection: SelectionSchema, waitForBuild: WaitSchema.optional() }).prefault({}),
   report: z.object({ selection: SelectionSchema, waitForBuild: WaitSchema.optional() }).prefault({}),
   archive: z.object({
