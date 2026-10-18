@@ -17,6 +17,7 @@ import { DEST_TYPES, SECRET_FIELDS, createProvider, validateDestinationConfig, t
 import { parseJson, resolveInsideRoots, UserError, nowIso } from "../util/misc.js";
 import { redact } from "../util/redact.js";
 import { runProc, cleanOutput, resolveTool } from "../util/proc.js";
+import { INSTALLABLE, installTool } from "../tools.js";
 import { writeNetworkConfig } from "../config.js";
 import { assertSafeUrl } from "../util/ssrf.js";
 import { gitAuthEnv, loadGitCredential } from "../jobs/git.js";
@@ -439,6 +440,13 @@ export function apiRouter(svc: Services, auth: AuthService) {
   });
 
   // ------------------------------------------------------------------ diagnostics
+  r.post("/tools/:name/install", async (req, res) => {
+    const name = INSTALLABLE.find((t) => t.toLowerCase() === String(req.params.name).toLowerCase());
+    if (!name) throw new UserError("That tool cannot be installed automatically", 404);
+    await installTool(ctx, name);
+    res.json({ ok: true });
+  });
+
   r.get("/diagnostics", async (_req, res) => res.json(await diagnostics()));
   r.get("/logs", (req, res) => res.json(ctx.logger.recent(Number(req.query.n) || 200, (req.query.level as any) || "debug")));
   r.get("/diagnostics/export", async (_req, res) => {
@@ -475,7 +483,7 @@ export function apiRouter(svc: Services, auth: AuthService) {
         notificationsPending: db.get("SELECT COUNT(*) c FROM notifications WHERE status IN ('pending','sending')")!.c,
       },
       counts: { watches: db.get("SELECT COUNT(*) c FROM watches")!.c, events: db.get("SELECT COUNT(*) c FROM events")!.c },
-      tools: { git: await probe(s.git.gitPath, ["--version"]), ilspycmd: await probe(resolveTool(s.tools.ilspyCmdPath), ["--version"]) },
+      tools: { git: await probe(s.git.gitPath, ["--version"]), ilspycmd: await probe(resolveTool(s.tools.ilspyCmdPath), ["--version"]), DepotDownloader: await probe(resolveTool(s.tools.depotDownloaderPath), ["--version"]) },
       accounts: db.all("SELECT name,status,status_detail,last_validated_at FROM accounts"),
       watchErrors: db.all("SELECT app_id,name,last_error,consecutive_failures,last_check_at FROM watches WHERE last_error IS NOT NULL"),
       recentLogs: ctx.logger.recent(100, "warn"),

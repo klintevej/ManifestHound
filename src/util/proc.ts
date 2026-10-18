@@ -40,11 +40,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** "ilspycmd" is installed to ~/.dotnet/tools, which services (systemd, Task Scheduler) often lack on PATH. */
+let toolsDir = "";
+/** Folder where ManifestHound installs the tools it downloads itself. */
+export const setToolsDir = (d: string) => { toolsDir = d; };
+export const MANAGED_TOOLS = ["ilspycmd", "DepotDownloader"] as const;
+const exeExt = () => (process.platform === "win32" ? ".exe" : "");
+
+/** Where a self-installed tool lives. */
+export const managedToolPath = (name: string) => path.join(toolsDir, name, name + exeExt());
+
+/**
+ * Bare tool names resolve to our own install first, then (ilspycmd) to ~/.dotnet/tools, which services
+ * (systemd, Task Scheduler) often lack on PATH. Anything else is used as given.
+ */
 export function resolveTool(name: string): string {
-  if (name !== "ilspycmd") return name;
-  const p = path.join(os.homedir(), ".dotnet", "tools", process.platform === "win32" ? "ilspycmd.exe" : "ilspycmd");
-  return fs.existsSync(p) ? p : name;
+  const base = name.replace(/[.]exe$/i, "");
+  if (!(MANAGED_TOOLS as readonly string[]).includes(base)) return name;
+  const found = [toolsDir && managedToolPath(base), base === "ilspycmd" && path.join(os.homedir(), ".dotnet", "tools", base + exeExt())].find((p) => p && fs.existsSync(p));
+  return found || name;
 }
 /** Case-insensitive only where the filesystem is (Windows). */
 export const pkey = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);

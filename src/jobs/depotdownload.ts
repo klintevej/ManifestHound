@@ -3,7 +3,8 @@ import path from "node:path";
 import { globToRegExp } from "./files.js";
 import { validateConfig, type JobCtx, type JobResult } from "./types.js";
 import { KeyedLock } from "../util/misc.js";
-import { cleanOutput, resolveTool, runProc } from "../util/proc.js";
+import { cleanOutput, runProc } from "../util/proc.js";
+import { ensureTool } from "../tools.js";
 
 const locks = new KeyedLock();
 
@@ -51,7 +52,7 @@ export function planDownloads(c: Pick<JobCtx, "event" | "outputDir">, cfg: any, 
 
 export async function depotDownloadHandler(c: JobCtx): Promise<JobResult> {
   const cfg = validateConfig("depotdownload", c.def.config);
-  const tool = resolveTool(c.app.settings.get().tools.depotDownloaderPath);
+  const tool = await ensureTool(c.app, "DepotDownloader", c.app.settings.get().tools.depotDownloaderPath, c.log, c.signal);
   return locks.run(c.outputDir, async () => {
     let filelist: string | null = null;
     if (cfg.files.length) {

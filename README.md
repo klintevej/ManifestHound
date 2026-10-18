@@ -53,6 +53,8 @@ Layout: `src/steam` (PICS, store metadata, login), `src/monitor` (detector, sche
 
 **Jobs** (Jobs page): types `collect`, `report`, `archive`, `decompile`, `git`. Each has a JSON config with a preset. Lower `order` runs first; equal order runs in parallel. Typical chain for a Unity game: `collect` (Managed DLLs) -> `decompile` (`assemblies`, `onExisting: overwrite`) -> `git` with source `{ "sourceJobId": <decompile id>, "path": "src", "dest": "GameName" }`. Details: `docs/JOBS.md`.
 
+**Tools**: DepotDownloader and ilspycmd are downloaded automatically the first time a job needs them (into `<data dir>/tools`), or on demand with the Install button on the Diagnostics page. DepotDownloader comes from its GitHub release (checksum verified). ilspycmd is installed with `dotnet tool install`, so it needs the .NET SDK; ManifestHound cannot install the SDK or Git for you. A custom path in Settings is never replaced.
+
 **Decompiler**: `dotnet tool install -g ilspycmd`; set the path in Settings > Jobs and tools if it is not on PATH. ILSpy 8.x has no switches for token comments or solution files, so ManifestHound removes `.sln` files and token comments after export and records that in `export-info.json`.
 
 **Git remotes**: set `remoteUrl` + `push: true` in the git job. Authentication uses your Git Credential Manager / SSH keys, or an HTTPS token stored encrypted in the job. Pushes are never forced; a rejected push fails the job but keeps the local commit, and retries do not duplicate commits.

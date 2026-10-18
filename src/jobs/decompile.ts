@@ -3,7 +3,8 @@ import path from "node:path";
 import { globToRegExp, hashFiles, listFiles } from "./files.js";
 import { slug, validateConfig, type JobCtx, type JobResult } from "./types.js";
 import { KeyedLock, safeJoin } from "../util/misc.js";
-import { cleanOutput, resolveTool, runProc } from "../util/proc.js";
+import { cleanOutput, runProc } from "../util/proc.js";
+import { ensureTool } from "../tools.js";
 
 const locks = new KeyedLock();
 const versionCache = new Map<string, string>();
@@ -76,7 +77,7 @@ interface Outcome { assembly: string; status: "exported" | "skipped" | "native" 
 export async function decompileHandler(c: JobCtx): Promise<JobResult> {
   const cfg = validateConfig("decompile", c.def.config);
   const e = c.event;
-  const tool = resolveTool(c.app.settings.get().tools.ilspyCmdPath);
+  const tool = await ensureTool(c.app, "ilspycmd", c.app.settings.get().tools.ilspyCmdPath, c.log, c.signal);
   // ilspycmd is built for one .NET major; let it run on a newer installed runtime.
   const env: NodeJS.ProcessEnv = { DOTNET_ROLL_FORWARD: process.env.DOTNET_ROLL_FORWARD ?? "Major", DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" };
 

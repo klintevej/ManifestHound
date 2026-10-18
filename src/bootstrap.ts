@@ -16,6 +16,7 @@ import { NotificationWorker, type Sender } from "./notify/worker.js";
 import { JobEngine } from "./jobs/engine.js";
 import { fileURLToPath } from "node:url";
 import { registerPathRoots } from "./util/redact.js";
+import { setToolsDir } from "./util/proc.js";
 import type { JobHandler, JobType } from "./jobs/types.js";
 
 export interface Overrides {
@@ -28,6 +29,7 @@ export interface Overrides {
 
 export function createServices(boot: BootConfig, o: Overrides = {}): Services {
   fs.mkdirSync(boot.dataDir, { recursive: true });
+  setToolsDir(path.join(boot.dataDir, "tools"));
   const db = new Db(path.join(boot.dataDir, "manifesthound.db"));
   db.migrate();
   const box = SecretBox.load(boot.dataDir, boot.secretKey);
