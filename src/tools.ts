@@ -77,11 +77,35 @@ async function installDepotDownloader(signal?: AbortSignal): Promise<void> {
   if (process.platform !== "win32") await fsp.chmod(managedToolPath("DepotDownloader"), 0o755);
 }
 
+const dotnetDir = () => path.dirname(managedToolPath("dotnet"));
+
+/** Point child processes at our own .NET when one was installed (apphost tools like ilspycmd read DOTNET_ROOT). */
+export function useManagedDotnet(): void {
+  if (fs.existsSync(managedToolPath("dotnet"))) process.env.DOTNET_ROOT = dotnetDir();
+}
+
+/** Microsoft's official dotnet-install script, run into <data>/tools/dotnet. No admin rights needed. */
+async function installDotnet(signal?: AbortSignal): Promise<string> {
+  const win = process.platform === "win32";
+  const dir = dotnetDir();
+  const script = path.join(path.dirname(dir), win ? "dotnet-install.ps1" : "dotnet-install.sh");
+  await fsp.mkdir(path.dirname(dir), { recursive: true });
+  await download(win ? "https://dot.net/v1/dotnet-install.ps1" : "https://dot.net/v1/dotnet-install.sh", script, signal);
+  const r = win
+    ? await runProc("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Channel", "8.0", "-InstallDir", dir, "-NoPath"], { signal, timeoutMs: 900_000, env })
+    : await runProc("bash", [script, "--channel", "8.0", "--install-dir", dir, "--no-path"], { signal, timeoutMs: 900_000, env });
+  await fsp.rm(script, { force: true });
+  if (r.missing) throw new Error(win ? "PowerShell was not found, so the .NET SDK could not be installed" : "bash was not found, so the .NET SDK could not be installed");
+  if (r.code !== 0) throw new Error(".NET SDK install failed: " + cleanOutput(r.stderr || r.stdout, 600) + (win ? "" : " (needs curl or wget)"));
+  useManagedDotnet();
+  return managedToolPath("dotnet");
+}
+
 async function installIlspy(signal?: AbortSignal): Promise<void> {
   const dir = path.dirname(managedToolPath("ilspycmd"));
   await fsp.rm(dir, { recursive: true, force: true });
-  const r = await runProc("dotnet", ["tool", "install", "ilspycmd", "--tool-path", dir, "--version", ILSPY_VERSION], { signal, timeoutMs: 300_000, env });
-  if (r.missing) throw new Error("The .NET SDK is required to install ilspycmd and was not found. Install it from https://dotnet.microsoft.com/download (SDK 8 or newer), then try again.");
+  const dotnet = (await isMissing(resolveTool("dotnet"))) ? await installDotnet(signal) : resolveTool("dotnet");
+  const r = await runProc(dotnet, ["tool", "install", "ilspycmd", "--tool-path", dir, "--version", ILSPY_VERSION], { signal, timeoutMs: 300_000, env });
   if (r.code !== 0) throw new Error("dotnet tool install failed: " + cleanOutput(r.stderr || r.stdout, 600));
 }
 
@@ -90,7 +114,12 @@ export function installTool(ctx: AppContext, name: ToolName, signal?: AbortSigna
   if (!INSTALLABLE.includes(name)) throw new UserError(`Unknown tool "${name}"`, 404);
   return locks.run("install:" + name, async () => {
     ctx.logger.child("tools").info(`installing ${name}`);
-    await (name === "ilspycmd" ? installIlspy(signal) : installDepotDownloader(signal));
+    try {
+      await (name === "ilspycmd" ? installIlspy(signal) : installDepotDownloader(signal));
+    } catch (e: any) {
+      ctx.logger.child("tools").warn(`${name} install failed: ${e.message}`);
+      throw e instanceof UserError ? e : new UserError(e.message, 502);
+    }
     const p = managedToolPath(name);
     if (!fs.existsSync(p)) throw new Error(`${name} install finished but ${path.basename(p)} was not found`);
     return p;

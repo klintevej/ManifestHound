@@ -43,7 +43,7 @@ import path from "node:path";
 let toolsDir = "";
 /** Folder where ManifestHound installs the tools it downloads itself. */
 export const setToolsDir = (d: string) => { toolsDir = d; };
-export const MANAGED_TOOLS = ["ilspycmd", "DepotDownloader"] as const;
+export const MANAGED_TOOLS = ["ilspycmd", "DepotDownloader", "dotnet"] as const;
 const exeExt = () => (process.platform === "win32" ? ".exe" : "");
 
 /** Where a self-installed tool lives. */
