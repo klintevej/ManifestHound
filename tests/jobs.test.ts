@@ -360,19 +360,30 @@ describe("git job", () => {
     expect(JSON.parse(runOf("git").result_json).data.push.status).toBe("pushed");
     expect(git(remote, "rev-parse", "main")).toBe(git(repo, "rev-parse", "HEAD"));
 
-    // someone else pushes to the remote -> our push is rejected (non-fast-forward), commit stays local & safe
+    // someone else pushes to the remote -> we sync to it first, so our commit lands on top and the push succeeds
     const other = path.join(tmp, "other"); execFileSync("git", ["clone", remote, other], { stdio: "pipe" });
     write(other, "x.txt", "x"); git(other, "add", "."); git(other, "-c", "user.name=o", "-c", "user.email=o@o", "commit", "-m", "other"); git(other, "push", "origin", "main");
     write(game, "A.dll", "v2");
     await publish(w.id, "3", { "481": "3" }); await drain();
     const run = runOf("git");
-    expect(run.status).toBe("failed");
+    expect(run.status).toBe("succeeded");
     const data = JSON.parse(run.result_json).data;
-    expect(data.commit.status).toBe("created");
-    expect(data.push.status).toBe("failed");
-    expect(git(repo, "rev-list", "--count", "HEAD")).toBe("2");
-    expect(git(remote, "log", "-1", "--format=%s")).toBe("other"); // remote history not rewritten
-  });
+    expect(data.commit).toMatchObject({ status: "created", added: 0, modified: 1, removed: 0 });
+    expect(data.push.status).toBe("pushed");
+    expect(git(repo, "rev-list", "--count", "HEAD")).toBe("3");
+    expect(git(remote, "log", "--format=%s", "-3")).toContain("other"); // remote history kept, not rewritten
+
+    // local commit that was never pushed + a different commit on the remote = diverged: refuse, never force
+    env.svc.ctx.db.run("UPDATE job_defs SET config_json=? WHERE name='git'", JSON.stringify({ ...gitCfg(repo), push: false, remoteUrl: remote.replace(/\\/g, "/") }));
+    write(game, "A.dll", "v3");
+    await publish(w.id, "4", { "481": "4" }); await drain();
+    git(other, "pull", "-q", "origin", "main"); write(other, "y.txt", "y"); git(other, "add", "."); git(other, "-c", "user.name=o", "-c", "user.email=o@o", "commit", "-m", "other2"); git(other, "push", "origin", "main");
+    write(game, "A.dll", "v4");
+    await publish(w.id, "5", { "481": "5" }); await drain();
+    expect(runOf("git").status).toBe("failed");
+    expect(runOf("git").error).toMatch(/diverged/);
+    expect(git(remote, "log", "-1", "--format=%s")).toBe("other2");
+  }, 60_000);
 
   it("works locally with no remote and refuses to commit inside another repository", async () => {
     const { game, w } = await twoJobs();
@@ -394,22 +405,23 @@ describe("git job: spread layout", () => {
     const w = env.svc.watches.create({ appId: 480, followMode: "all" }, "Spacewar");
     const exp = path.join(tmp, "exports"); // stands in for the decompile job's src/ folder
     write(exp, "Assembly-CSharp/Game.cs", "class Game {}"); write(exp, "Assembly-CSharp/Old.cs", "class Old {}"); write(exp, "PhotonUnityNetworking/Net.cs", "class Net {}");
-    write(exp, "Assembly-CSharp/export-info.json", "{}"); write(exp, "PhotonUnityNetworking/export-info.json", "{}");
+    write(exp, "Assembly-CSharp/export-info.json", "{}"); write(exp, "PhotonUnityNetworking/export-info.json", "{}"); write(exp, "Assembly-CSharp/Assembly-CSharp.csproj", "<Project/>"); // generated, must never be committed
     const repo = path.join(tmp, "repo");
-    write(repo, "README.md", "mine"); write(repo, "Unrelated/keep.txt", "keep");
+    write(repo, "README.md", "mine"); write(repo, "LICENSE.md", "mit"); write(repo, "Unrelated/keep.txt", "keep");
     const cfg = { repoPath: repo, sources: [{ path: exp, dest: "", mirror: true }] };
     env.svc.ctx.db.run("INSERT INTO job_defs(name,type,ord,max_retries,timeout_sec,config_json,created_at,updated_at) VALUES('git','git',1,0,60,?,'x','x')", JSON.stringify(cfg));
     await publish(w.id, "1", { "1": "a" }); await publish(w.id, "2", { "1": "b" }); await drain();
     expect(runOf("git").error).toBeNull();
-    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/Old.cs", "Assembly-CSharp/export-info.json", "PhotonUnityNetworking/Net.cs", "PhotonUnityNetworking/export-info.json", "manifesthound-metadata.json"]);
+    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/Old.cs", "PhotonUnityNetworking/Net.cs", "manifesthound-metadata.json"]);
     // README and Unrelated stay untracked and untouched
     write(repo, "Unrelated/keep.txt", "keep");
     fs.rmSync(path.join(exp, "Assembly-CSharp/Old.cs")); fs.rmSync(path.join(exp, "PhotonUnityNetworking"), { recursive: true }); // a whole assembly disappears write(exp, "Assembly-CSharp/Game.cs", "class Game2 {}");
     await publish(w.id, "3", { "1": "c" }); await drain();
     expect(runOf("git").status).toBe("succeeded");
-    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/export-info.json", "manifesthound-metadata.json"]);
+    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "manifesthound-metadata.json"]);
     expect(fs.existsSync(path.join(repo, "Unrelated/keep.txt"))).toBe(true);
     expect(fs.existsSync(path.join(repo, "PhotonUnityNetworking"))).toBe(false);
     expect(fs.readFileSync(path.join(repo, "README.md"), "utf8")).toBe("mine");
+    expect(fs.readFileSync(path.join(repo, "LICENSE.md"), "utf8")).toBe("mit");
   }, 60_000);
 });

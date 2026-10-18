@@ -122,6 +122,25 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
       await git(exist ? ["checkout", cfg.branch] : ["checkout", "-b", cfg.branch]);
     }
 
+    // --- sync: start from the remote's current commit so the diff below is against what is really published
+    if (cfg.remoteUrl || (await git(["remote", "get-url", cfg.remoteName], { allowFail: true })).code === 0) {
+      const f = await git(["fetch", "--quiet", cfg.remoteName, cfg.branch], { allowFail: true });
+      const ref = `${cfg.remoteName}/${cfg.branch}`;
+      const remoteHas = f.code === 0 && (await git(["rev-parse", "--verify", "-q", `refs/remotes/${ref}`], { allowFail: true })).code === 0;
+      if (f.code !== 0) c.log("Could not fetch the remote, continuing from the local copy: " + redactString(cleanOutput(f.stderr || f.stdout, 200)));
+      else if (remoteHas) {
+        const hasHead = (await git(["rev-parse", "--verify", "-q", "HEAD"], { allowFail: true })).code === 0;
+        if (!hasHead) { await git(["checkout", "-f", "-B", cfg.branch, ref]); c.log(`Synced a new repository to ${ref}`); }
+        else if ((await git(["merge-base", "--is-ancestor", "HEAD", ref], { allowFail: true })).code === 0) {
+          const m = await git(["merge", "--ff-only", "--quiet", ref], { allowFail: true });
+          if (m.code !== 0) throw new Error(`Could not fast-forward to ${ref}; the working tree has local changes: ${cleanOutput(m.stderr || m.stdout, 300)}`);
+          c.log(`Fast-forwarded to ${ref}`);
+        } else if ((await git(["merge-base", "--is-ancestor", ref, "HEAD"], { allowFail: true })).code !== 0) {
+          throw new Error(`The local repository and ${ref} have diverged. Resolve this by hand (history is never rewritten automatically).`);
+        }
+      }
+    }
+
     // --- commit (idempotent per event via trailer)
     const result: { commit: Record<string, unknown>; push: Record<string, unknown> } = { commit: { status: "skipped" }, push: { status: "disabled" } };
     let sha = "";
@@ -132,6 +151,10 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
       c.log(`Commit for event already exists (${sha.slice(0, 10)}); not creating another.`);
     } else {
       const dests: string[] = [];
+      const managed: string[] = [];
+      // Folders we spread into the repo root last time (recorded in the metadata file), so a vanished assembly can be removed.
+      const prevMeta = await fsp.readFile(path.join(repo, METADATA), "utf8").then(JSON.parse).catch(() => null);
+      const prevFolders: string[] = Array.isArray(prevMeta?.folders) ? prevMeta.folders.filter((x: unknown) => typeof x === "string" && x && !x.includes("/") && x !== ".git") : [];
       for (const src of cfg.sources) {
         const rootDir = src.sourceJobId != null
           ? (src.path ? safeJoin(sourceJobOutput(c, src.sourceJobId), src.path) : sourceJobOutput(c, src.sourceJobId))
@@ -139,7 +162,7 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
         const dest = src.dest.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
         const destAbs = dest ? safeJoin(repo, dest) : repo;
         if (isInside(path.join(repo, ".git"), destAbs)) throw new UserError("dest may not be inside .git");
-        const files = await scanFiles(rootDir, { root: "", sourceJobId: null, include: src.include, exclude: src.exclude, files: [], extensions: [], recursive: true, maxFiles: 200_000 }, c.signal);
+        const files = (await scanFiles(rootDir, { root: "", sourceJobId: null, include: src.include, exclude: src.exclude, files: [], extensions: [], recursive: true, maxFiles: 200_000 }, c.signal)).filter((f) => !isGenerated(f.path));
         const keep = new Set<string>();
         let copied = 0, skippedSecret = 0;
         for (const f of files) {
@@ -160,26 +183,23 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
             const dirAbs = safeJoin(repo, d);
             if (!(await exists(dirAbs))) continue;
             for (const old of await listFiles(dirAbs, { root: "", sourceJobId: null, include: [], exclude: [], files: [], extensions: [], recursive: true, maxFiles: 500_000 }, c.signal)) {
-              if (!keep.has(pkey(d + "/" + old.path))) { await fsp.rm(safeJoin(dirAbs, old.path), { force: true }); removed++; }
+              if (!keep.has(pkey(d + "/" + old.path)) && !isProtected(old.path)) { await fsp.rm(safeJoin(dirAbs, old.path), { force: true }); removed++; }
             }
           }
         } else if (src.mirror && (await exists(destAbs))) {
           for (const old of await listFiles(destAbs, { root: "", sourceJobId: null, include: [], exclude: [], files: [], extensions: [], recursive: true, maxFiles: 500_000 }, c.signal)) {
-            if (!keep.has(pkey(old.path)) && path.basename(old.path) !== METADATA) { await fsp.rm(safeJoin(destAbs, old.path), { force: true }); removed++; }
+            if (!keep.has(pkey(old.path)) && path.basename(old.path) !== METADATA && !isProtected(old.path)) { await fsp.rm(safeJoin(destAbs, old.path), { force: true }); removed++; }
           }
         }
-        if (!dest && src.mirror) {
-          // An assembly folder whose DLL vanished from the game: drop it from the repo (only folders we exported, marked by export-info.json).
-          for (const d of await fsp.readdir(repo, { withFileTypes: true })) {
-            if (!d.isDirectory() || d.name === ".git" || top.includes(d.name)) continue;
-            if (!(await exists(path.join(repo, d.name, "export-info.json")))) continue;
-            await fsp.rm(path.join(repo, d.name), { recursive: true, force: true });
-            if ((await git(["ls-files", "--", d.name])).stdout.trim()) dests.push(d.name);
-            c.log("Removed assembly folder no longer in the game: " + d.name);
-          }
-        }
+        if (!dest && src.mirror) managed.push(...top);
         c.log(`Source ${rootDir} -> ${dest || "."}: ${copied} copied, ${removed} removed, ${skippedSecret} secret-like files skipped`);
         if (dest) dests.push(dest); else dests.push(...top);
+      }
+      for (const d of prevFolders) {
+        if (managed.includes(d) || !(await exists(path.join(repo, d)))) continue;
+        await fsp.rm(path.join(repo, d), { recursive: true, force: true });
+        if ((await git(["ls-files", "--", d])).stdout.trim()) dests.push(d);
+        c.log("Removed assembly folder no longer in the game: " + d);
       }
       if (!dests.length) throw new Error("No sources configured: nothing to track in the repository");
 
@@ -200,6 +220,10 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
       }
       const staged = (await git(["diff", "--cached", "--name-only", "--", ...dests])).stdout.split("\n").map((x) => x.trim()).filter(Boolean);
       const contentChanges = staged.filter((p) => p !== metaRel);
+      const byKind = async (kind: string) => (await git(["diff", "--cached", "--name-only", `--diff-filter=${kind}`, "--", ...dests])).stdout.split(NL).map((x) => x.trim()).filter((p) => p && p !== metaRel);
+      const [added, modified, removedFiles] = [await byKind("A"), await byKind("M"), await byKind("D")];
+      c.log(`Changes against the repository: ${added.length} added, ${modified.length} modified, ${removedFiles.length} removed`);
+      for (const [label, list] of [["added", added], ["removed", removedFiles]] as const) if (list.length) c.log(`  ${label}: ${list.slice(0, 20).join(", ")}${list.length > 20 ? `, and ${list.length - 20} more` : ""}`);
       if (!contentChanges.length && !cfg.allowMetadataOnlyCommit) {
         result.commit = { status: "skipped", note: "no file changes; empty commit avoided" };
         c.log("No file changes to commit (empty commit avoided).");
@@ -208,7 +232,7 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
           generator: "ManifestHound", eventId: e.id, appId: e.appId, gameName: e.gameName, buildId: e.newBuild, previousBuildId: e.prevBuild,
           manifestIds: e.changes.manifestIds, depots: e.changes.depots, updateTime: e.updateTime ?? e.detectedAt, detectedAt: e.detectedAt,
           tools: { git: (await git(["--version"])).stdout.trim(), ilspycmd: await toolVersionHint(c), node: process.version },
-          filesChanged: contentChanges.length,
+          folders: managed, filesChanged: contentChanges.length, added: added.length, modified: modified.length, removed: removedFiles.length,
         };
         const metaAbs = safeJoin(repo, metaRel);
         await fsp.mkdir(path.dirname(metaAbs), { recursive: true });
@@ -218,7 +242,7 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
         const msg = `${commitSubject(e)}\n\n${commitBody(e)}`;
         await git(["commit", "--only", "-m", msg, "--", ...dests, metaRel]);
         sha = (await git(["rev-parse", "HEAD"])).stdout.trim();
-        result.commit = { status: "created", sha, subject: commitSubject(e), files: contentChanges.length };
+        result.commit = { status: "created", sha, subject: commitSubject(e), files: contentChanges.length, added: added.length, modified: modified.length, removed: removedFiles.length, addedFiles: added.slice(0, 200), removedFiles: removedFiles.slice(0, 200) };
         c.log(`Committed ${sha.slice(0, 10)}: ${commitSubject(e)}`);
       }
     }
@@ -241,6 +265,11 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
 }
 
 const METADATA = "manifesthound-metadata.json";
+const NL = String.fromCharCode(10);
+/** Generated by the decompiler; never committed, and removed from the repository if an older run committed them. */
+const isGenerated = (p: string) => /[.]csproj$/i.test(p) || path.posix.basename(p) === "export-info.json";
+/** Repository documents that mirroring must never delete. */
+const isProtected = (p: string) => /^(readme|license|licence|copying|notice|[.]git(ignore|attributes))/i.test(path.posix.basename(p));
 
 function sourceJobOutput(c: JobCtx, jobId: number): string {
   const row = c.app.db.get("SELECT * FROM job_defs WHERE id=?", jobId);
