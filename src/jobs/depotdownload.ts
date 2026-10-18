@@ -52,6 +52,14 @@ export function planDownloads(c: Pick<JobCtx, "event" | "outputDir">, cfg: any, 
 
 export async function depotDownloadHandler(c: JobCtx): Promise<JobResult> {
   const cfg = validateConfig("depotdownload", c.def.config);
+  let password = "";
+  if (cfg.accountId != null) {
+    const a = c.app.db.get("SELECT username, password_enc FROM accounts WHERE id=?", cfg.accountId);
+    if (!a) throw new Error("The Steam account for this job no longer exists");
+    if (!a.password_enc) throw new Error("This Steam account has no saved password. Sign in again in Settings and tick the save password option.");
+    cfg.username = a.username;
+    password = c.app.box.decrypt(a.password_enc);
+  }
   const tool = await ensureTool(c.app, "DepotDownloader", c.app.settings.get().tools.depotDownloaderPath, c.log, c.signal);
   return locks.run(c.outputDir, async () => {
     let filelist: string | null = null;
@@ -63,13 +71,14 @@ export async function depotDownloadHandler(c: JobCtx): Promise<JobResult> {
     for (const p of plans) {
       c.signal.throwIfAborted();
       c.log(`DepotDownloader: ${p.label}`);
-      const r = await runProc(tool, p.args, { signal: c.signal, timeoutMs: c.def.timeoutSec * 1000, maxBytes: 256 * 1024, env: { DOTNET_CLI_TELEMETRY_OPTOUT: "1" } });
+      const r = await runProc(tool, p.args, { signal: c.signal, timeoutMs: c.def.timeoutSec * 1000, maxBytes: 256 * 1024, input: password ? password + String.fromCharCode(10) : undefined, env: { DOTNET_CLI_TELEMETRY_OPTOUT: "1" } });
       if (r.missing) {
         throw new Error(`DepotDownloader not found: "${tool}". Download it from github.com/SteamRE/DepotDownloader/releases (linux-arm64, linux-x64 or windows-x64) and set Settings > Jobs and tools > DepotDownloader path.`);
       }
       const out = cleanOutput(r.stdout + "\n" + r.stderr, 1500);
       if (r.code !== 0) {
         if (/password|two.?factor|2fa|steam guard|login/i.test(out) && cfg.username) {
+          if (cfg.accountId != null) throw new Error(`Steam login failed. Check the saved password in Settings, and approve the sign-in in the Steam mobile app (or turn off Steam Guard prompts for this account). Output: ${out.slice(-300)}`);
           throw new Error(`DepotDownloader needs you to sign in once. Run this in a terminal and complete Steam Guard, then retry: DepotDownloader -app ${c.event.appId} -username ${cfg.username} -remember-password -manifest-only. Output: ${out.slice(-300)}`);
         }
         throw new Error(`DepotDownloader failed for ${p.label} (exit ${r.code}): ${out.slice(-600)}`);

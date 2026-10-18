@@ -18,6 +18,7 @@ interface Pending {
   session: any;
   accountName: string;
   username: string;
+  passwordEnc?: string;
   state: "waiting" | "authenticated" | "failed";
   error?: string;
   actions: { type: string; detail?: string }[];
@@ -27,7 +28,8 @@ interface Pending {
 
 /**
  * Interactive Steam sign-in using steam-session (Valve's documented auth-session flow).
- * The password is passed to Steam and never stored or logged; only the resulting refresh token is kept (encrypted).
+ * The password is passed to Steam and never logged; only the resulting refresh token is kept (encrypted).
+ * The password is stored (encrypted) only when the user ticks the save option, for DepotDownloader.
  */
 export class SteamAuth {
   private pending = new Map<string, Pending>();
@@ -37,11 +39,12 @@ export class SteamAuth {
     for (const [id, p] of this.pending) if (p.expires < Date.now()) { try { p.session.cancelLoginAttempt(); } catch { /* ignore */ } this.pending.delete(id); }
   }
 
-  async start(input: { name: string; username: string; password: string }) {
+  async start(input: { name: string; username: string; password: string; savePassword?: boolean }) {
     this.sweep();
     if (!input.name?.trim() || !input.username?.trim() || !input.password) throw new UserError("name, username and password are required");
     const session = new LoginSession(EAuthTokenPlatformType.SteamClient);
     const p: Pending = { session, accountName: input.name.trim(), username: input.username.trim(), state: "waiting", actions: [], expires: Date.now() + 5 * 60_000 };
+    if (input.savePassword) p.passwordEnc = this.ctx.box.encrypt(input.password);
     const id = randomUUID();
     this.pending.set(id, p);
     session.on("authenticated", () => this.finish(p));
@@ -94,10 +97,10 @@ export class SteamAuth {
       let id: number;
       if (existing) {
         id = existing.id;
-        this.ctx.db.run("UPDATE accounts SET username=?, refresh_token_enc=?, status='valid', status_detail=NULL, last_validated_at=? WHERE id=?", p.username, enc, nowIso(), id);
+        this.ctx.db.run("UPDATE accounts SET username=?, refresh_token_enc=?, password_enc=?, status='valid', status_detail=NULL, last_validated_at=? WHERE id=?", p.username, enc, p.passwordEnc ?? null, nowIso(), id);
       } else {
-        id = this.ctx.db.run("INSERT INTO accounts(name,username,refresh_token_enc,status,last_validated_at,created_at) VALUES(?,?,?,?,?,?)",
-          p.accountName, p.username, enc, "valid", nowIso(), nowIso()).lastId;
+        id = this.ctx.db.run("INSERT INTO accounts(name,username,refresh_token_enc,password_enc,status,last_validated_at,created_at) VALUES(?,?,?,?,?,?,?)",
+          p.accountName, p.username, enc, p.passwordEnc ?? null, "valid", nowIso(), nowIso()).lastId;
       }
       this.ctx.db.run("UPDATE accounts SET steam_id=? WHERE id=?", String(p.session.steamID ?? ""), id);
       this.steam.drop(id);

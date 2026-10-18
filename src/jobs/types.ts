@@ -63,6 +63,8 @@ export const ConfigSchemas: Record<JobType, z.ZodType<any>> = {
     pinManifests: z.boolean().default(true),
     os: z.enum(["", "windows", "linux", "macos"]).default(""),
     allPlatforms: z.boolean().default(false),
+    /** Saved Steam account whose stored password DepotDownloader uses (sent on stdin, never on the command line). */
+    accountId: z.number().int().nullable().default(null),
     /** Steam account name for owned content. Sign in once in a terminal with -remember-password. Empty = anonymous. */
     username: z.string().regex(/^[\w.-]*$/).default(""),
     /** Only download files matching these globs (relative to the depot root). Empty = everything. */

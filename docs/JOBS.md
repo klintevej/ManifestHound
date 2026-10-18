@@ -27,6 +27,6 @@ Jobs page > **Archive** creates three chained jobs for one game:
 2. `decompile`: reads the download folder. `assemblies` are globs relative to it: `Assembly-CSharp.dll`, `*_Data/Managed/*.dll`, `**/Photon*.dll`. `selection.exclude` skips framework DLLs.
 3. `git`: mirrors each assembly folder to the repository root, commits `Manifest <id> <time>` and pushes.
 
-Setup: download DepotDownloader from github.com/SteamRE/DepotDownloader/releases (windows-x64, linux-x64 or linux-arm64), set its path in Settings > Jobs and tools. For an owned game, sign in once in a terminal so the session is remembered: `DepotDownloader -app <id> -username <name> -remember-password`. ManifestHound never passes a password on the command line.
+Setup: DepotDownloader is downloaded automatically on first use. For an owned game, add the Steam account in Settings and tick the save password option, then pick that account in the job (`accountId`). The password is stored encrypted and sent to DepotDownloader on stdin, never on the command line. The first login needs approval in the Steam mobile app; DepotDownloader remembers the session after that.
 
 How updates are noticed: the monitor polls Steam every interval (60s by default). A changed build or depot manifest creates an update event, which queues these jobs in order. A game with only a build change and no manifest change downloads all depots of the app.

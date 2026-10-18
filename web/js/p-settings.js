@@ -101,12 +101,13 @@ async function renderAccounts(el, refresh) {
 
 function loginDialog(existing) {
   const name = h("input", { value: existing?.name || "", disabled: !!existing }), user = h("input", { value: existing?.username || "", autocomplete: "off" }), pw = h("input", { type: "password", autocomplete: "off" });
+  const save = check("Save the password (encrypted) so downloads can use this account", !!existing?.has_password);
   const area = h("div");
   let pending = null, poll = null;
-  const m = modal("Steam sign-in", h("div", {}, field("Account label", name), field("Steam account name", user), field("Password", pw, "Sent to Steam only. Never stored."), area), { actions: [
+  const m = modal("Steam sign-in", h("div", {}, field("Account label", name), field("Steam account name", user), field("Password", pw, "Sent to Steam. Only kept if you tick the box below."), save.el, area), { actions: [
     { label: "Close", onclick: (c) => { clearInterval(poll); if (pending) del("/accounts/login/" + pending).catch(() => {}); c(); refresh(); } },
     { label: "Sign in", class: "primary", onclick: () => guard(async () => {
-      const r = await post("/accounts/login", { name: name.value, username: user.value, password: pw.value }); pw.value = ""; pending = r.pendingId; show(r);
+      const r = await post("/accounts/login", { name: name.value, username: user.value, password: pw.value, savePassword: save.input.checked }); pw.value = ""; pending = r.pendingId; show(r);
     }) }] });
   function show(r) {
     clearInterval(poll);

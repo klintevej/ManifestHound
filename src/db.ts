@@ -175,6 +175,12 @@ CREATE TABLE git_credentials (
 );
 `,
   },
+  {
+    version: 3,
+    sql: `
+ALTER TABLE accounts ADD COLUMN password_enc TEXT; -- optional, only when the user chose to save it for DepotDownloader
+`,
+  },
 ];
 
 export class Db {

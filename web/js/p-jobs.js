@@ -9,7 +9,7 @@ const PRESETS = {
   git: { repoPath: "", credentialId: null, authorName: "", authorEmail: "", init: true, branch: "main", push: false, remoteName: "origin", remoteUrl: "", allowMetadataOnlyCommit: false, sources: [{ sourceJobId: null, path: "src", dest: "YourGame", mirror: true }] },
 };
 const HELP = {
-  depotdownload: "Runs DepotDownloader for the exact manifests of the update, into this job's output directory. Files filter is optional. Needs the DepotDownloader path in Settings. For owned games set username and sign in once in a terminal with -remember-password.",
+  depotdownload: "Runs DepotDownloader for the exact manifests of the update, into this job's output directory. Files filter is optional. Needs the DepotDownloader path in Settings. For owned games pick a Steam account that has a saved password (Settings).",
   collect: "Copies the selected files (globs, extensions, exclusions) into the job's output directory and writes added/modified/removed/unchanged reports with SHA-256 hashes.",
   report: "Like Collect, but only writes reports (Markdown, HTML, JSON). Nothing is copied.",
   archive: "Zips the selection plus metadata.json and uploads it to the destinations listed in destinationIds (configure them in Settings > Upload destinations).",
@@ -18,14 +18,14 @@ const HELP = {
 };
 
 export async function jobsPage({ refresh }) {
-  const [jobs, watches, runs, creds] = await Promise.all([get("/jobs"), get("/watches"), get("/job-runs"), get("/git/credentials")]);
+  const [jobs, watches, runs, creds, accounts] = await Promise.all([get("/jobs"), get("/watches"), get("/job-runs"), get("/git/credentials"), get("/accounts")]);
   const nameOf = (id) => (id == null ? "All games" : watches.find((w) => w.id === id)?.name ?? `#${id}`);
 
   function archiveWizard() {
     if (!watches.length) return toast("Add a game first", "bad");
     const game = select(watches.map((w) => [w.id, w.name]), watches[0].id);
     const os = select([["", "Same as this machine"], ["windows", "Windows build"], ["linux", "Linux build"], ["macos", "macOS build"]], "windows");
-    const user = h("input", { placeholder: "Empty = anonymous (only works for free or public depots)" });
+    const user = select([["", "Anonymous (free or public depots only)"], ...accounts.filter((a) => a.has_password).map((a) => [a.id, `${a.name} (${a.username})`])], "");
     const dlFiles = h("textarea", {}, "**/*_Data/Managed/*.dll");
     const asm = h("textarea", {}, "*_Data/Managed/*.dll");
     const excl = h("textarea", {}, ["**/System*.dll", "**/mscorlib.dll", "**/Mono.*.dll", "**/netstandard.dll", "**/UnityEngine*.dll", "**/Microsoft.*.dll"].join(String.fromCharCode(10)));
@@ -37,13 +37,13 @@ export async function jobsPage({ refresh }) {
     const lines = (t) => t.value.split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean);
     modal("Archive setup", h("div", {}, h("p", {}, "Creates three chained jobs for one game: download the updated files with DepotDownloader, decompile the DLLs you pick, then commit and push one folder per assembly (Assembly-CSharp/, PhotonUnityNetworking/, ...) to Git. Runs automatically on every detected update."),
       h("div", { class: "grid cols2" }, field("Game", game), field("Download", os)),
-      field("Steam account name", user, "Needed for games you own. Sign in once in a terminal first: DepotDownloader -app <id> -username <name> -remember-password"),
+      field("Steam account", user, "Needed for games you own. Add the account in Settings and tick save password. Approve the first login in the Steam mobile app."),
       field("Files to download (globs, one per line)", dlFiles), field("DLLs to decompile (globs, one per line)", asm, "Examples: Assembly-CSharp.dll, *_Data/Managed/*.dll, **/Photon*.dll"), field("Skip these DLLs", excl),
       h("div", { class: "grid cols2" }, field("Repository folder", repo), field("Branch", branch)), field("Remote URL", remote),
       field("Push credential", cred), push.el), { wide: true, actions: [
       { label: "Cancel", onclick: (c) => c() },
       { label: "Create jobs", class: "primary", onclick: (c) => guard(async () => {
-        const r = await post("/presets/archive", { watchId: Number(game.value), os: os.value, steamUsername: user.value.trim(), downloadFiles: lines(dlFiles), assemblies: lines(asm),
+        const r = await post("/presets/archive", { watchId: Number(game.value), os: os.value, steamAccountId: user.value ? Number(user.value) : null, downloadFiles: lines(dlFiles), assemblies: lines(asm),
           excludeAssemblies: lines(excl), repoPath: repo.value.trim(), remoteUrl: remote.value.trim(), branch: branch.value.trim() || "main", push: push.input.checked, credentialId: cred.value ? Number(cred.value) : null });
         toast("Created 3 jobs. Repository: " + r.repoPath, "ok"); c(); refresh();
       }) }] });
