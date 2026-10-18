@@ -70,6 +70,8 @@ export const ConfigSchemas: Record<JobType, z.ZodType<any>> = {
     /** Only download files matching these globs (relative to the depot root). Empty = everything. */
     files: z.array(z.string()).default([]),
     maxDownloads: z.number().int().min(1).max(64).default(8),
+    /** Empty the output folder before downloading, so files removed in the new manifest do not linger. Re-downloads everything. */
+    cleanFirst: z.boolean().default(false),
   }).prefault({}),
   collect: z.object({ selection: SelectionSchema, waitForBuild: WaitSchema.optional() }).prefault({}),
   report: z.object({ selection: SelectionSchema, waitForBuild: WaitSchema.optional() }).prefault({}),
@@ -86,6 +88,8 @@ export const ConfigSchemas: Record<JobType, z.ZodType<any>> = {
     assemblies: z.array(z.string().min(1)).default([]),
     languageVersion: z.string().regex(/^(CSharp\d+(_\d+)?|Preview|Latest)$/).default("Latest"),
     onExisting: z.enum(["versioned", "overwrite", "skip", "fail"]).default("versioned"),
+    /** Delete exported folders of assemblies that are no longer in the source (removed between builds). */
+    pruneStale: z.boolean().default(false),
     nestedDirectories: z.boolean().default(false),
     removeDeadCode: z.boolean().default(false),
     copyInputs: z.boolean().default(true),

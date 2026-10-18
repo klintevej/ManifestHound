@@ -168,6 +168,16 @@ export async function gitHandler(c: JobCtx): Promise<JobResult> {
             if (!keep.has(pkey(old.path)) && path.basename(old.path) !== METADATA) { await fsp.rm(safeJoin(destAbs, old.path), { force: true }); removed++; }
           }
         }
+        if (!dest && src.mirror) {
+          // An assembly folder whose DLL vanished from the game: drop it from the repo (only folders we exported, marked by export-info.json).
+          for (const d of await fsp.readdir(repo, { withFileTypes: true })) {
+            if (!d.isDirectory() || d.name === ".git" || top.includes(d.name)) continue;
+            if (!(await exists(path.join(repo, d.name, "export-info.json")))) continue;
+            await fsp.rm(path.join(repo, d.name), { recursive: true, force: true });
+            if ((await git(["ls-files", "--", d.name])).stdout.trim()) dests.push(d.name);
+            c.log("Removed assembly folder no longer in the game: " + d.name);
+          }
+        }
         c.log(`Source ${rootDir} -> ${dest || "."}: ${copied} copied, ${removed} removed, ${skippedSecret} secret-like files skipped`);
         if (dest) dests.push(dest); else dests.push(...top);
       }

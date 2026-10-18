@@ -180,6 +180,14 @@ export async function decompileHandler(c: JobCtx): Promise<JobResult> {
     }
   });
 
+  if (cfg.pruneStale) {
+    const current = new Set(targets.map((t) => slug(path.basename(t.path).replace(/[.](dll|exe)$/i, ""))));
+    for (const d of await fsp.readdir(srcRoot, { withFileTypes: true })) {
+      const marked = d.isDirectory() && (await fsp.stat(path.join(srcRoot, d.name, "export-info.json")).catch(() => null));
+      if (marked && !current.has(d.name.split("@")[0])) { await fsp.rm(path.join(srcRoot, d.name), { recursive: true, force: true }); c.log("Removed stale export " + d.name); }
+    }
+  }
+
   const count = (s: Outcome["status"]) => outcomes.filter((o) => o.status === s).length;
   const failed = outcomes.filter((o) => o.status === "failed");
   await fsp.writeFile(path.join(c.outputDir, `decompile-${e.id}.json`), JSON.stringify({ tool: { name: "ilspycmd", version }, outcomes, missing }, null, 2));

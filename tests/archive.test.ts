@@ -58,6 +58,8 @@ describe("Archive preset", () => {
     expect(jobs.map((j: any) => j.ord)).toEqual([10, 20, 30]);
     expect(by.decompile.config.selection.sourceJobId).toBe(by.depotdownload.id);
     expect(by.decompile.config.onExisting).toBe("overwrite");
+    expect(by.depotdownload.config.cleanFirst).toBe(true);
+    expect(by.decompile.config.pruneStale).toBe(true);
     expect(by.git.config.sources[0]).toMatchObject({ sourceJobId: by.decompile.id, path: "src", dest: "", mirror: true });
     expect(by.git.config.push).toBe(true);
     expect(jobs.every((j: any) => j.watchId === w.id)).toBe(true);

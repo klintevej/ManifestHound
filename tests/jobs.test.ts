@@ -394,20 +394,22 @@ describe("git job: spread layout", () => {
     const w = env.svc.watches.create({ appId: 480, followMode: "all" }, "Spacewar");
     const exp = path.join(tmp, "exports"); // stands in for the decompile job's src/ folder
     write(exp, "Assembly-CSharp/Game.cs", "class Game {}"); write(exp, "Assembly-CSharp/Old.cs", "class Old {}"); write(exp, "PhotonUnityNetworking/Net.cs", "class Net {}");
+    write(exp, "Assembly-CSharp/export-info.json", "{}"); write(exp, "PhotonUnityNetworking/export-info.json", "{}");
     const repo = path.join(tmp, "repo");
     write(repo, "README.md", "mine"); write(repo, "Unrelated/keep.txt", "keep");
     const cfg = { repoPath: repo, sources: [{ path: exp, dest: "", mirror: true }] };
     env.svc.ctx.db.run("INSERT INTO job_defs(name,type,ord,max_retries,timeout_sec,config_json,created_at,updated_at) VALUES('git','git',1,0,60,?,'x','x')", JSON.stringify(cfg));
     await publish(w.id, "1", { "1": "a" }); await publish(w.id, "2", { "1": "b" }); await drain();
     expect(runOf("git").error).toBeNull();
-    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/Old.cs", "PhotonUnityNetworking/Net.cs", "manifesthound-metadata.json"]);
+    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/Old.cs", "Assembly-CSharp/export-info.json", "PhotonUnityNetworking/Net.cs", "PhotonUnityNetworking/export-info.json", "manifesthound-metadata.json"]);
     // README and Unrelated stay untracked and untouched
     write(repo, "Unrelated/keep.txt", "keep");
-    fs.rmSync(path.join(exp, "Assembly-CSharp/Old.cs")); write(exp, "Assembly-CSharp/Game.cs", "class Game2 {}");
+    fs.rmSync(path.join(exp, "Assembly-CSharp/Old.cs")); fs.rmSync(path.join(exp, "PhotonUnityNetworking"), { recursive: true }); // a whole assembly disappears write(exp, "Assembly-CSharp/Game.cs", "class Game2 {}");
     await publish(w.id, "3", { "1": "c" }); await drain();
     expect(runOf("git").status).toBe("succeeded");
-    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "PhotonUnityNetworking/Net.cs", "manifesthound-metadata.json"]);
+    expect(git(repo, "ls-files").split("\n").sort()).toEqual(["Assembly-CSharp/Game.cs", "Assembly-CSharp/export-info.json", "manifesthound-metadata.json"]);
     expect(fs.existsSync(path.join(repo, "Unrelated/keep.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(repo, "PhotonUnityNetworking"))).toBe(false);
     expect(fs.readFileSync(path.join(repo, "README.md"), "utf8")).toBe("mine");
   }, 60_000);
 });

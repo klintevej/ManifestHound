@@ -244,9 +244,9 @@ export function apiRouter(svc: Services, auth: AuthService) {
     const common = { watchId: w.id, enabled: true, depotFilter: [], secrets: undefined, outputDir: null as string | null, description: "Created by the Archive preset" };
     const ids = db.tx(() => {
       const dl = insertJob({ ...common, name: `Archive 1: download ${tag}`, type: "depotdownload", ord: 10, timeoutSec: 6 * 3600, maxRetries: 2, stopOnFail: true,
-        config: { os: b.os, username: b.steamUsername, accountId: b.steamAccountId, files: b.downloadFiles } });
+        config: { os: b.os, username: b.steamUsername, accountId: b.steamAccountId, files: b.downloadFiles, cleanFirst: true } });
       const dc = insertJob({ ...common, name: `Archive 2: decompile ${tag}`, type: "decompile", ord: 20, timeoutSec: 3600, maxRetries: 1, stopOnFail: true,
-        config: { selection: { sourceJobId: dl, exclude: b.excludeAssemblies }, assemblies: b.assemblies, languageVersion: b.languageVersion, onExisting: "overwrite", copyInputs: false } });
+        config: { selection: { sourceJobId: dl, exclude: b.excludeAssemblies }, assemblies: b.assemblies, languageVersion: b.languageVersion, onExisting: "overwrite", pruneStale: true, copyInputs: false } });
       const gt = insertJob({ ...common, name: `Archive 3: commit and push ${tag}`, type: "git", ord: 30, timeoutSec: 1800, maxRetries: 2, stopOnFail: false,
         config: { repoPath, branch: b.branch, remoteUrl: b.remoteUrl, push: b.push, credentialId: b.credentialId, sources: [{ sourceJobId: dc, path: "src", dest: "", mirror: true }] } });
       return { download: dl, decompile: dc, git: gt };

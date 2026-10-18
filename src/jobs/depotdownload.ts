@@ -62,6 +62,10 @@ export async function depotDownloadHandler(c: JobCtx): Promise<JobResult> {
   }
   const tool = await ensureTool(c.app, "DepotDownloader", c.app.settings.get().tools.depotDownloaderPath, c.log, c.signal);
   return locks.run(c.outputDir, async () => {
+    if (cfg.cleanFirst) {
+      c.log("Emptying the output folder before download");
+      for (const e of await fsp.readdir(c.outputDir).catch(() => [] as string[])) await fsp.rm(path.join(c.outputDir, e), { recursive: true, force: true });
+    }
     let filelist: string | null = null;
     if (cfg.files.length) {
       filelist = path.join(c.outputDir, ".manifesthound-filelist.txt");
