@@ -4,8 +4,14 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_USER="${1:-${SUDO_USER:-root}}"
-NODE="$(command -v node || true)"
-[ -n "$NODE" ] || { echo "node not found (need Node.js 24+)." >&2; exit 1; }
+# Needs Node 24+ (node:sqlite). A system node is often older, so also look in the run user's nvm folder.
+HOME_DIR="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+NODE=""
+for cand in "$(command -v node || true)" $(ls -d "$HOME_DIR"/.nvm/versions/node/v*/bin/node 2>/dev/null | sort -V -r); do
+  [ -x "$cand" ] || continue
+  [ "$("$cand" -p 'process.versions.node.split(".")[0]')" -ge 24 ] && { NODE="$cand"; break; }
+done
+[ -n "$NODE" ] || { echo "Node.js 24+ not found (system node is too old for node:sqlite). Install it, e.g. with nvm." >&2; exit 1; }
 [ -f "$ROOT/dist/main.js" ] || { echo "Run 'npm run build' first." >&2; exit 1; }
 cat > /etc/systemd/system/manifesthound.service <<UNIT
 [Unit]

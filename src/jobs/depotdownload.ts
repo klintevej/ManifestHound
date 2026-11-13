@@ -7,6 +7,7 @@ import { cleanOutput, runProc } from "../util/proc.js";
 import { ensureTool } from "../tools.js";
 
 const locks = new KeyedLock();
+const DOWNLOAD_LOGIN_ID = 0x4d484e45;
 
 /** Convert a glob (forward slashes) into a DepotDownloader `regex:` filelist line. Either slash style matches. */
 export function globToFilelistLine(glob: string): string {
@@ -39,7 +40,8 @@ export function planDownloads(c: Pick<JobCtx, "event" | "outputDir">, cfg: any, 
   if (branch !== "public") base.push("-branch", branch);
   if (cfg.os) base.push("-os", cfg.os);
   if (cfg.allPlatforms) base.push("-all-platforms");
-  if (cfg.username) base.push("-username", cfg.username, "-remember-password");
+  // Own LogonID so this session does not kick the monitor's session for the same account (Steam allows one per LogonID).
+  if (cfg.username) base.push("-username", cfg.username, "-remember-password", "-loginid", String(DOWNLOAD_LOGIN_ID));
   if (filelist) base.push("-filelist", filelist);
   const wanted: string[] = cfg.depots;
   const manifests = Object.entries(c.event.changes.manifestIds).filter(([d]) => !wanted.length || wanted.includes(d));

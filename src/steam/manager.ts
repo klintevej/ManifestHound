@@ -13,7 +13,10 @@ export interface FetchRequest { appId: number; branch: string; accountId: number
 /** Anything that can report an app's build and depot manifests. Production: SteamManager. Tests: fakes. */
 export interface ManifestSource { fetch(req: FetchRequest): Promise<AppSnapshot> }
 
-interface Entry { client: any; loggedOn: boolean; waiters: ((e?: Error) => void)[]; accountId: number | null }
+/** Steam allows one session per account and LogonID. A fixed id of our own keeps DepotDownloader (see depotdownload.ts) and this client from kicking each other off. */
+export const MONITOR_LOGIN_ID = 0x4d484e44;
+
+interface Entry { client: any; lastDrop: string; loggedOn: boolean; waiters: ((e?: Error) => void)[]; accountId: number | null }
 
 /** Maintains one Steam client connection per account (plus one anonymous) and serves PICS app-info requests. */
 export class SteamManager implements ManifestSource {
@@ -31,12 +34,12 @@ export class SteamManager implements ManifestSource {
     if (!e) {
       const dataDirectory = path.join(this.ctx.boot.dataDir, "steam");
       fs.mkdirSync(dataDirectory, { recursive: true });
-      const client = new SteamUser({ dataDirectory, autoRelogin: true, enablePicsCache: false });
-      e = { client, loggedOn: false, waiters: [], accountId };
+      const client = new SteamUser({ dataDirectory, autoRelogin: true, enablePicsCache: false, protocol: SteamUser.EConnectionProtocol.WebSocket });
+      e = { client, lastDrop: "", loggedOn: false, waiters: [], accountId };
       this.entries.set(k, e);
       const entry = e;
       client.on("loggedOn", () => { entry.loggedOn = true; entry.waiters.splice(0).forEach((w) => w()); this.log.info("Steam logged on", { account: accountId ?? "anonymous" }); if (accountId != null) this.markAccount(accountId, "valid", null); });
-      client.on("disconnected", (_r: number, msg: string) => { entry.loggedOn = false; this.log.warn("Steam disconnected", { msg }); });
+      client.on("disconnected", (r: number, msg: string) => { entry.loggedOn = false; entry.lastDrop = `${msg} (${r})`; this.log.warn("Steam disconnected", { msg }); });
       client.on("error", (err: any) => {
         entry.loggedOn = false;
         this.log.error("Steam client error", { msg: err?.message, eresult: err?.eresult });
@@ -51,12 +54,17 @@ export class SteamManager implements ManifestSource {
       else {
         const row = this.ctx.db.get("SELECT refresh_token_enc FROM accounts WHERE id=?", accountId);
         if (!row?.refresh_token_enc) { this.entries.delete(k); throw new SteamDataError(`Account ${accountId} is not authenticated. Sign in under Settings > Steam accounts.`); }
-        client.logOn({ renewRefreshTokens: false, refreshToken: this.ctx.box.decrypt(row.refresh_token_enc) });
+        client.logOn({ renewRefreshTokens: false, logonID: MONITOR_LOGIN_ID, refreshToken: this.ctx.box.decrypt(row.refresh_token_enc) });
       }
     }
     if (!e.loggedOn) {
       const entry = e;
-      await withTimeout(new Promise<void>((res, rej) => entry.waiters.push((err) => (err ? rej(err) : res()))), 45_000, "Steam logon");
+      try { await withTimeout(new Promise<void>((res, rej) => entry.waiters.push((err) => (err ? rej(err) : res()))), 45_000, "Steam logon"); }
+      catch (err) {
+        // Start clean next time instead of stacking waiters on a connection that never completed.
+        this.entries.delete(k); try { entry.client.logOff(); } catch { /* ignore */ }
+        throw new Error(`${(err as Error).message}${entry.lastDrop ? `. Last Steam disconnect: ${entry.lastDrop}` : ""}`);
+      }
     }
     return e;
   }
